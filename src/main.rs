@@ -153,6 +153,8 @@ mod easing_styles {
         mid_point + (sign * difference.abs())
     }
     pub mod in_direction {
+        use crate::easing_styles::flip_across_midline;
+
         pub fn sine(a: f32, b: f32, t: f32) -> f32 {
             let alpha = super::flip_across_midline(
                 f32::sin(super::flip_across_midline(
@@ -161,6 +163,12 @@ mod easing_styles {
                 )),
                 0.5,
             );
+            super::lerp(a, b, alpha)
+        }
+        pub fn circular(a: f32, b: f32, t: f32) -> f32 {
+            let half_pi = super::PI / 2.0;
+            let angle = super::lerp(half_pi * 3.0, half_pi * 4.0, t);
+            let alpha = flip_across_midline(-f32::sin(angle), 0.5);
             println!("{alpha}");
             super::lerp(a, b, alpha)
         }
@@ -168,6 +176,12 @@ mod easing_styles {
     pub mod out_direction {
         pub fn sine(a: f32, b: f32, t: f32) -> f32 {
             let alpha = f32::sin(t * (super::PI / 2.0));
+            super::lerp(a, b, alpha)
+        }
+        pub fn circular(a: f32, b: f32, t: f32) -> f32 {
+            let half_pi = super::PI / 2.0;
+            let angle = super::lerp(half_pi * 2.0, half_pi * 1.0, t);
+            let alpha = f32::sin(angle);
             super::lerp(a, b, alpha)
         }
     }
@@ -199,7 +213,7 @@ fn lerp_color<T: SpaceObject>(object: &mut T) {
     let current_alpha = (new_elapsed_time % 2.0) / 2.0;
     let current_index = ((new_elapsed_time / 2.0) % (color_vector.len() as f32)).floor();
     object.set_current_color(Color::new(
-        easing_styles::in_direction::sine(
+        easing_styles::out_direction::circular(
             color_vector.get(current_index as usize).unwrap().r,
             color_vector
                 .get(((current_index + 1.0) % (color_vector.len() as f32)) as usize)
@@ -207,7 +221,7 @@ fn lerp_color<T: SpaceObject>(object: &mut T) {
                 .r,
             current_alpha,
         ),
-        easing_styles::in_direction::sine(
+        easing_styles::out_direction::circular(
             color_vector.get(current_index as usize).unwrap().g,
             color_vector
                 .get(((current_index + 1.0) % (color_vector.len() as f32)) as usize)
@@ -215,7 +229,7 @@ fn lerp_color<T: SpaceObject>(object: &mut T) {
                 .g,
             current_alpha,
         ),
-        easing_styles::in_direction::sine(
+        easing_styles::out_direction::circular(
             color_vector.get(current_index as usize).unwrap().b,
             color_vector
                 .get(((current_index + 1.0) % (color_vector.len() as f32)) as usize)
@@ -229,6 +243,7 @@ fn lerp_color<T: SpaceObject>(object: &mut T) {
 }
 struct DrawObject;
 struct ColorLerp;
+struct UpdateBackgroundStars;
 impl<'a> System<'a> for ColorLerp {
     type SystemData = (
         WriteStorage<'a, Sun>,
@@ -261,6 +276,18 @@ impl<'a> System<'a> for DrawObject {
             }
         });
     }
+}
+#[derive(Debug)]
+struct BackgroundStars {
+    offset_from_center: Vec2,
+    speed: f32,
+}
+impl Component for BackgroundStars {
+    type Storage = VecStorage<Self>;
+}
+impl<'a> System<'a> for UpdateBackgroundStars {
+    type SystemData = (ReadStorage<'a, BackgroundStars>);
+    fn run(&mut self, (background_star): Self::SystemData) {}
 }
 fn window_conf() -> Conf {
     Conf {
@@ -303,7 +330,6 @@ async fn main() {
                 .build();
             continue;
         }
-        for i in 1..=50 {}
         color_lerp.run_now(&world);
         draw_object.run_now(&world);
         next_frame().await;
