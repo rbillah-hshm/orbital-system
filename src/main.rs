@@ -2,8 +2,6 @@
 #![allow(unused_parens)]
 #![allow(unused_variables)]
 extern crate specs;
-use std::thread::current;
-
 use big_number::BigNumber;
 use big_number::BigVec2;
 
@@ -146,11 +144,39 @@ fn map_ranges(number: f32, a: f32, b: f32, c: f32, d: f32) -> f32 {
 fn lerp(a: f32, b: f32, t: f32) -> f32 {
     a + t * (b - a)
 }
+mod easing_styles {
+    use crate::lerp;
+    use std::f32::consts::PI;
+    fn flip_across_midline(point: f32, mid_point: f32) -> f32 {
+        let difference = mid_point - point;
+        let sign = f32::signum(difference);
+        mid_point + (sign * difference.abs())
+    }
+    pub mod in_direction {
+        pub fn sine(a: f32, b: f32, t: f32) -> f32 {
+            let alpha = super::flip_across_midline(
+                f32::sin(super::flip_across_midline(
+                    t * (super::PI / 2.0),
+                    super::PI / 4.0,
+                )),
+                0.5,
+            );
+            println!("{alpha}");
+            super::lerp(a, b, alpha)
+        }
+    }
+    pub mod out_direction {
+        pub fn sine(a: f32, b: f32, t: f32) -> f32 {
+            let alpha = f32::sin(t * (super::PI / 2.0));
+            super::lerp(a, b, alpha)
+        }
+    }
+}
 fn map_world_to_screen_space(number: BigNumber) -> f32 {
     let mut number_clone = number.clone();
     number_clone.decrease_power(
-        number_clone.exponent -
-            (map_ranges(number_clone.exponent as f32, 7.0, 9.0, 1.0, 3.0) as i32)
+        number_clone.exponent
+            - (map_ranges(number_clone.exponent as f32, 7.0, 9.0, 1.0, 3.0) as i32),
     );
     number_clone.base * Real::powf(10.0, number_clone.exponent as f32)
 }
@@ -160,42 +186,45 @@ fn map_screen_to_world_space(number: f32) -> BigNumber {
 fn draw_object<T: SpaceObject>(object: &T) {
     let position = object.get_position();
     let radius = object.get_radius();
-    let (x, y) = (map_world_to_screen_space(position.x), map_world_to_screen_space(position.y));
+    let (x, y) = (
+        map_world_to_screen_space(position.x),
+        map_world_to_screen_space(position.y),
+    );
     draw_circle(x, y, radius, object.get_current_color());
 }
 fn lerp_color<T: SpaceObject>(object: &mut T) {
     let color_vector = object.get_color();
-    let new_elapsed_time = object.set_color_elapsed_time(
-        object.get_color_elapsed_time() + get_frame_time()
-    );
+    let new_elapsed_time =
+        object.set_color_elapsed_time(object.get_color_elapsed_time() + get_frame_time());
     let current_alpha = (new_elapsed_time % 2.0) / 2.0;
     let current_index = ((new_elapsed_time / 2.0) % (color_vector.len() as f32)).floor();
-    object.set_current_color(
-        Color::new(
-            lerp(
-                color_vector.get(current_index as usize).unwrap().r,
-                color_vector
-                    .get(((current_index + 1.0) % (color_vector.len() as f32)) as usize)
-                    .unwrap().r,
-                current_alpha
-            ),
-            lerp(
-                color_vector.get(current_index as usize).unwrap().g,
-                color_vector
-                    .get(((current_index + 1.0) % (color_vector.len() as f32)) as usize)
-                    .unwrap().g,
-                current_alpha
-            ),
-            lerp(
-                color_vector.get(current_index as usize).unwrap().b,
-                color_vector
-                    .get(((current_index + 1.0) % (color_vector.len() as f32)) as usize)
-                    .unwrap().b,
-                current_alpha
-            ),
-            1.0
-        )
-    );
+    object.set_current_color(Color::new(
+        easing_styles::in_direction::sine(
+            color_vector.get(current_index as usize).unwrap().r,
+            color_vector
+                .get(((current_index + 1.0) % (color_vector.len() as f32)) as usize)
+                .unwrap()
+                .r,
+            current_alpha,
+        ),
+        easing_styles::in_direction::sine(
+            color_vector.get(current_index as usize).unwrap().g,
+            color_vector
+                .get(((current_index + 1.0) % (color_vector.len() as f32)) as usize)
+                .unwrap()
+                .g,
+            current_alpha,
+        ),
+        easing_styles::in_direction::sine(
+            color_vector.get(current_index as usize).unwrap().b,
+            color_vector
+                .get(((current_index + 1.0) % (color_vector.len() as f32)) as usize)
+                .unwrap()
+                .b,
+            current_alpha,
+        ),
+        1.0,
+    ));
     ()
 }
 struct DrawObject;
@@ -218,7 +247,11 @@ impl<'a> System<'a> for ColorLerp {
     }
 }
 impl<'a> System<'a> for DrawObject {
-    type SystemData = (ReadStorage<'a, Sun>, ReadStorage<'a, Planet>, ReadStorage<'a, IsOrbital>);
+    type SystemData = (
+        ReadStorage<'a, Sun>,
+        ReadStorage<'a, Planet>,
+        ReadStorage<'a, IsOrbital>,
+    );
     fn run(&mut self, (sun, planet, is_orbital): Self::SystemData) {
         sun.join().for_each(draw_object);
         planet.join().for_each(draw_object);
@@ -270,6 +303,7 @@ async fn main() {
                 .build();
             continue;
         }
+        for i in 1..=50 {}
         color_lerp.run_now(&world);
         draw_object.run_now(&world);
         next_frame().await;
