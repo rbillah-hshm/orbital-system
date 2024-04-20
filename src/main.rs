@@ -2,10 +2,14 @@
 #![allow(unused_parens)]
 #![allow(unused_variables)]
 extern crate specs;
+use std::collections::HashMap;
+use std::hash::DefaultHasher;
+use std::hash::Hash;
+use std::hash::Hasher;
+
 use big_number::BigNumber;
 use big_number::BigVec2;
 
-use macroquad::camera::Camera2D;
 use macroquad::color;
 use macroquad::color::BLACK;
 use macroquad::math::Vec2;
@@ -15,8 +19,18 @@ use macroquad::window::next_frame;
 use macroquad::window::request_new_screen_size;
 use macroquad::window::Conf;
 use num::traits::real::Real;
+use physics::update_bodies;
+use physics::RigidBody;
 use specs::prelude::*;
+use specs::shred::Fetch;
+use specs::shred::FetchMut;
 mod big_number;
+mod physics;
+fn calculate_hash<T: Hash>(value: &T) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    value.hash(&mut hasher);
+    hasher.finish()
+}
 // Hierarchy: Sun => Planet => Moon
 // Planets are unscaled for the sake of visualization purposes
 trait SpaceObject {
@@ -243,7 +257,13 @@ fn lerp_color<T: SpaceObject>(object: &mut T) {
 }
 struct DrawObject;
 struct ColorLerp;
+struct AddBackgroundStars;
 struct UpdateBackgroundStars;
+struct DestroyBackgroundStars;
+
+struct RigidBodyStruct {
+    data: HashMap<u64, RigidBody>,
+}
 impl<'a> System<'a> for ColorLerp {
     type SystemData = (
         WriteStorage<'a, Sun>,
@@ -281,13 +301,57 @@ impl<'a> System<'a> for DrawObject {
 struct BackgroundStars {
     offset_from_center: Vec2,
     speed: f32,
+    id: u64,
 }
 impl Component for BackgroundStars {
     type Storage = VecStorage<Self>;
 }
+impl<'a> System<'a> for AddBackgroundStars {
+    type SystemData = (
+        Entities<'a>,
+        ReadStorage<'a, BackgroundStars>,
+        Read<'a, LazyUpdate>,
+    );
+    fn run(&mut self, (entities, background_star, updater): Self::SystemData) {
+        let size = background_star.count();
+        if (size < 50) {
+            for i in (size..50) {
+                let star = entities.create();
+                updater.insert(
+                    star,
+                    BackgroundStars {
+                        offset_from_center: vec2(0.0, 0.0),
+                        speed: 0.0,
+                        id: calculate_hash(&star),
+                    },
+                )
+            }
+        }
+    }
+}
 impl<'a> System<'a> for UpdateBackgroundStars {
-    type SystemData = (ReadStorage<'a, BackgroundStars>);
-    fn run(&mut self, (background_star): Self::SystemData) {}
+    type SystemData = (WriteStorage<'a, BackgroundStars>);
+    fn run(&mut self, (mut background_star): Self::SystemData) {
+        for star in background_star.join() {}
+    }
+}
+impl<'a> System<'a> for DestroyBackgroundStars {
+    type SystemData = (
+        WriteExpect<'a, RigidBodyStruct>,
+        Entities<'a>,
+        ReadStorage<'a, BackgroundStars>,
+    );
+    fn run(&mut self, (mut rigid_body_map, entities, background_star): Self::SystemData) {
+        for (entity, star) in (&entities, &background_star).join() {
+            let offset = star.offset_from_center;
+            if ((f32::abs(offset.x - (screen_width() / 2.0)) > (screen_width() / 2.0))
+                || f32::abs(offset.y - (screen_height() / 2.0)) > (screen_height() / 2.0))
+            {
+                rigid_body_map.data.remove(&star.id);
+                let _ = entities.delete(entity);
+            }
+        }
+    }
 }
 fn window_conf() -> Conf {
     Conf {
@@ -303,10 +367,19 @@ async fn main() {
     world.register::<Sun>();
     world.register::<Planet>();
     world.register::<IsOrbital>();
+    world.register::<BackgroundStars>();
     // Initialize Simulation
     let mut first_iteration = true;
     let mut color_lerp = ColorLerp;
     let mut draw_object = DrawObject;
+    let mut destroy_background_stars = DestroyBackgroundStars;
+    let mut add_background_stars = AddBackgroundStars;
+    let mut update_background_stars = UpdateBackgroundStars;
+
+    let rigid_bodies = RigidBodyStruct {
+        data: HashMap::new(),
+    };
+    world.insert(rigid_bodies);
     loop {
         clear_background(BLACK);
         if screen_width() != 0.8 * 1920.0 || screen_height() != 0.8 * 1080.0 {
@@ -330,8 +403,13 @@ async fn main() {
                 .build();
             continue;
         }
+        destroy_background_stars.run_now(&mut world);
+        add_background_stars.run_now(&mut world);
+
+        update_background_stars.run_now(&world);
         color_lerp.run_now(&world);
         draw_object.run_now(&world);
+        world.maintain();
         next_frame().await;
     }
 }
