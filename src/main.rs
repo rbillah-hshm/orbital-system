@@ -6,14 +6,17 @@ use std::collections::HashMap;
 use std::hash::DefaultHasher;
 use std::hash::Hash;
 use std::hash::Hasher;
+use std::ops::Mul;
 
 use big_number::BigNumber;
 use big_number::BigVec2;
 
+use ::rand::random;
 use macroquad::color;
 use macroquad::color::BLACK;
 use macroquad::math::Vec2;
 use macroquad::prelude::*;
+use macroquad::rand;
 use macroquad::window::clear_background;
 use macroquad::window::next_frame;
 use macroquad::window::request_new_screen_size;
@@ -261,8 +264,9 @@ struct AddBackgroundStars;
 struct UpdateBackgroundStars;
 struct DestroyBackgroundStars;
 
-struct RigidBodyStruct {
-    data: HashMap<u64, RigidBody>,
+struct Renderable;
+impl Component for Renderable {
+    type Storage = VecStorage<Self>;
 }
 impl<'a> System<'a> for ColorLerp {
     type SystemData = (
@@ -314,40 +318,82 @@ impl<'a> System<'a> for AddBackgroundStars {
     );
     fn run(&mut self, (entities, background_star, updater): Self::SystemData) {
         let size = background_star.count();
-        if (size < 50) {
-            for i in (size..50) {
+        if (size < 100) {
+            for i in (size..100) {
                 let star = entities.create();
+                let star_id = calculate_hash(&star);
                 updater.insert(
                     star,
                     BackgroundStars {
                         offset_from_center: vec2(0.0, 0.0),
                         speed: 0.0,
-                        id: calculate_hash(&star),
+                        id: star_id,
                     },
-                )
+                );
+                updater.insert(
+                    star,
+                    RigidBody {
+                        acceleration: vec2(
+                            (rand::gen_range(100, 1000) as f32 / 100.0)
+                                * (match (rand::gen_range(0.0, 1.0) < 0.5) {
+                                    true => -1.0,
+                                    false => 1.0,
+                                }),
+                            (rand::gen_range(100, 1000) as f32 / 100.0)
+                                * (match (rand::gen_range(0.0, 1.0) < 0.5) {
+                                    true => -1.0,
+                                    false => 1.0,
+                                }),
+                        )
+                        .normalize()
+                        .mul(rand::gen_range(500, 5000) as f32 / 10.0),
+                        ..Default::default()
+                    },
+                );
             }
         }
     }
 }
 impl<'a> System<'a> for UpdateBackgroundStars {
-    type SystemData = (WriteStorage<'a, BackgroundStars>);
-    fn run(&mut self, (mut background_star): Self::SystemData) {
-        for star in background_star.join() {}
+    type SystemData = (
+        Entities<'a>,
+        WriteStorage<'a, BackgroundStars>,
+        ReadStorage<'a, RigidBody>,
+        Read<'a, LazyUpdate>,
+    );
+    fn run(&mut self, (entities, mut background_star, rigid_body, updater): Self::SystemData) {
+        let mut body_vec = Vec::new();
+        for (star, body) in (&background_star, &rigid_body).join() {
+            body_vec.push(body.clone());
+        }
+        body_vec = update_bodies(body_vec);
+        for (i, (entity, star, body)) in (&entities, &mut background_star, &rigid_body)
+            .join()
+            .enumerate()
+        {
+            updater.remove::<RigidBody>(entity);
+            updater.insert(entity, body_vec.get(i).unwrap().clone());
+            star.offset_from_center = vec2(
+                body_vec.get(i).unwrap().position.x,
+                body_vec.get(i).unwrap().position.y,
+            );
+            draw_circle(
+                body_vec.get(i).unwrap().position.x + screen_width() / 2.0,
+                body_vec.get(i).unwrap().position.y + screen_height() / 2.0,
+                1.0,
+                WHITE,
+            );
+        }
     }
 }
 impl<'a> System<'a> for DestroyBackgroundStars {
-    type SystemData = (
-        WriteExpect<'a, RigidBodyStruct>,
-        Entities<'a>,
-        ReadStorage<'a, BackgroundStars>,
-    );
-    fn run(&mut self, (mut rigid_body_map, entities, background_star): Self::SystemData) {
+    type SystemData = (Entities<'a>, ReadStorage<'a, BackgroundStars>);
+    fn run(&mut self, (entities, background_star): Self::SystemData) {
         for (entity, star) in (&entities, &background_star).join() {
             let offset = star.offset_from_center;
-            if ((f32::abs(offset.x - (screen_width() / 2.0)) > (screen_width() / 2.0))
-                || f32::abs(offset.y - (screen_height() / 2.0)) > (screen_height() / 2.0))
+            if ((f32::abs(offset.x) > (screen_width() / 2.0))
+                || f32::abs(offset.y) > (screen_height() / 2.0))
             {
-                rigid_body_map.data.remove(&star.id);
                 let _ = entities.delete(entity);
             }
         }
@@ -368,6 +414,9 @@ async fn main() {
     world.register::<Planet>();
     world.register::<IsOrbital>();
     world.register::<BackgroundStars>();
+
+    world.register::<Renderable>();
+    world.register::<RigidBody>();
     // Initialize Simulation
     let mut first_iteration = true;
     let mut color_lerp = ColorLerp;
@@ -375,11 +424,6 @@ async fn main() {
     let mut destroy_background_stars = DestroyBackgroundStars;
     let mut add_background_stars = AddBackgroundStars;
     let mut update_background_stars = UpdateBackgroundStars;
-
-    let rigid_bodies = RigidBodyStruct {
-        data: HashMap::new(),
-    };
-    world.insert(rigid_bodies);
     loop {
         clear_background(BLACK);
         if screen_width() != 0.8 * 1920.0 || screen_height() != 0.8 * 1080.0 {
