@@ -3,9 +3,7 @@
 #![allow(unused_variables)]
 extern crate specs;
 use std::collections::HashMap;
-use std::hash::DefaultHasher;
-use std::hash::Hash;
-use std::hash::Hasher;
+use std::f32::consts::PI;
 use std::ops::Mul;
 
 use big_number::BigNumber;
@@ -29,11 +27,9 @@ use specs::shred::Fetch;
 use specs::shred::FetchMut;
 mod big_number;
 mod physics;
-fn calculate_hash<T: Hash>(value: &T) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    value.hash(&mut hasher);
-    hasher.finish()
-}
+
+const SUN_MASS: f32 = 1.0;
+const ASTRONOMICAL_UNIT: f32 = 149597871.0;
 // Hierarchy: Sun => Planet => Moon
 // Planets are unscaled for the sake of visualization purposes
 trait SpaceObject {
@@ -186,7 +182,6 @@ mod easing_styles {
             let half_pi = super::PI / 2.0;
             let angle = super::lerp(half_pi * 3.0, half_pi * 4.0, t);
             let alpha = flip_across_midline(-f32::sin(angle), 0.5);
-            println!("{alpha}");
             super::lerp(a, b, alpha)
         }
     }
@@ -258,6 +253,29 @@ fn lerp_color<T: SpaceObject>(object: &mut T) {
     ));
     ()
 }
+// Elliptical Functions
+// I reverse-engineered these formulae into code myself
+fn radius_of_ellipse_from_theta(theta: f32, eccentricity: f32, major_axis: f32) -> f32 {
+    let semi_major_axis = major_axis / 2.0;
+    let semi_minor_axis = semi_major_axis * f32::sqrt(1.0 - Real::powi(eccentricity, 2));
+    let semi_lactus_rect = semi_minor_axis * f32::sqrt(1.0 - Real::powi(eccentricity, 2));
+    semi_lactus_rect / (1.0 + (eccentricity * f32::cos(theta)))
+}
+fn get_ellispe_period(major_axis: f32, gravitational_constant: f32) -> f32 {
+    f32::sqrt((4.0 * Real::powi(PI, 2) * Real::powi(major_axis, 3)) / gravitational_constant)
+}
+fn get_delta_theta(
+    radius: f32,
+    eccentricity: f32,
+    major_axis: f32,
+    gravitational_constant: f32,
+) -> f32 {
+    let semi_major_axis = major_axis / 2.0;
+    let semi_minor_axis = semi_major_axis * f32::sqrt(1.0 - Real::powi(eccentricity, 2));
+    let period = get_ellispe_period(major_axis, gravitational_constant);
+    0.0
+}
+//
 struct DrawObject;
 struct ColorLerp;
 struct AddBackgroundStars;
@@ -305,7 +323,6 @@ impl<'a> System<'a> for DrawObject {
 struct BackgroundStars {
     offset_from_center: Vec2,
     speed: f32,
-    id: u64,
 }
 impl Component for BackgroundStars {
     type Storage = VecStorage<Self>;
@@ -318,16 +335,14 @@ impl<'a> System<'a> for AddBackgroundStars {
     );
     fn run(&mut self, (entities, background_star, updater): Self::SystemData) {
         let size = background_star.count();
-        if (size < 100) {
-            for i in (size..100) {
+        if (size < 200) {
+            for i in (size..200) {
                 let star = entities.create();
-                let star_id = calculate_hash(&star);
                 updater.insert(
                     star,
                     BackgroundStars {
                         offset_from_center: vec2(0.0, 0.0),
                         speed: 0.0,
-                        id: star_id,
                     },
                 );
                 updater.insert(
@@ -380,7 +395,7 @@ impl<'a> System<'a> for UpdateBackgroundStars {
             draw_circle(
                 body_vec.get(i).unwrap().position.x + screen_width() / 2.0,
                 body_vec.get(i).unwrap().position.y + screen_height() / 2.0,
-                1.0,
+                map_ranges(star.offset_from_center.length(), 1.0, 1000.0, 1.0, 30.0),
                 WHITE,
             );
         }
@@ -396,6 +411,20 @@ impl<'a> System<'a> for DestroyBackgroundStars {
             {
                 let _ = entities.delete(entity);
             }
+        }
+    }
+}
+struct OrbitMetadata {
+    gravitational_constant: f32,
+    eccentricity: f32,
+    major_axis: f32,
+}
+impl OrbitMetadata {
+    fn new(gravitational_constant: f32, eccentricity: f32, major_axis: f32) -> Self {
+        OrbitMetadata {
+            gravitational_constant,
+            eccentricity,
+            major_axis,
         }
     }
 }
@@ -424,6 +453,71 @@ async fn main() {
     let mut destroy_background_stars = DestroyBackgroundStars;
     let mut add_background_stars = AddBackgroundStars;
     let mut update_background_stars = UpdateBackgroundStars;
+    let mut orbit_metadata = HashMap::new();
+    orbit_metadata.insert(
+        "Mercury",
+        OrbitMetadata::new(
+            3.7,
+            0.206,
+            map_world_to_screen_space(BigNumber::new_d(ASTRONOMICAL_UNIT) * 0.3871),
+        ),
+    );
+    orbit_metadata.insert(
+        "Venus",
+        OrbitMetadata::new(
+            8.9,
+            0.007,
+            map_world_to_screen_space(BigNumber::new_d(ASTRONOMICAL_UNIT) * 0.7233),
+        ),
+    );
+    orbit_metadata.insert(
+        "Earth",
+        OrbitMetadata::new(
+            9.8,
+            0.017,
+            map_world_to_screen_space(BigNumber::new_d(ASTRONOMICAL_UNIT) * 1.000),
+        ),
+    );
+    orbit_metadata.insert(
+        "Mars",
+        OrbitMetadata::new(
+            3.7,
+            0.094,
+            map_world_to_screen_space(BigNumber::new_d(ASTRONOMICAL_UNIT) * 1.5273),
+        ),
+    );
+    orbit_metadata.insert(
+        "Jupiter",
+        OrbitMetadata::new(
+            23.1,
+            0.049,
+            map_world_to_screen_space(BigNumber::new_d(ASTRONOMICAL_UNIT) * 5.2028),
+        ),
+    );
+    orbit_metadata.insert(
+        "Saturn",
+        OrbitMetadata::new(
+            9.0,
+            0.052,
+            map_world_to_screen_space(BigNumber::new_d(ASTRONOMICAL_UNIT) * 9.5388),
+        ),
+    );
+    orbit_metadata.insert(
+        "Uranus",
+        OrbitMetadata::new(
+            8.7,
+            0.047,
+            map_world_to_screen_space(BigNumber::new_d(ASTRONOMICAL_UNIT) * 19.1914),
+        ),
+    );
+    orbit_metadata.insert(
+        "Neptune",
+        OrbitMetadata::new(
+            11.0,
+            0.010,
+            map_world_to_screen_space(BigNumber::new_d(ASTRONOMICAL_UNIT) * 30.0611),
+        ),
+    );
     loop {
         clear_background(BLACK);
         if screen_width() != 0.8 * 1920.0 || screen_height() != 0.8 * 1080.0 {
