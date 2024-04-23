@@ -517,7 +517,7 @@ async fn main() {
         OrbitMetadata::new(
             23.1,
             0.8,
-            map_world_to_screen_space(BigNumber::new_d(ASTRONOMICAL_UNIT) * 0.6),
+            map_world_to_screen_space(BigNumber::new_d(ASTRONOMICAL_UNIT) * 2.5),
             vec![BROWN, ORANGE, WHITE],
         ),
     );
