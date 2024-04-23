@@ -151,6 +151,9 @@ impl SpaceObject for Moon {
 impl Component for IsOrbital {
     type Storage = VecStorage<Self>;
 }
+fn get_first_significant_figure(number: f32) -> f32 {
+    number / Real::powf(10.0, number.log10().floor())
+}
 fn map_ranges(number: f32, a: f32, b: f32, c: f32, d: f32) -> f32 {
     c + ((number - a) / (b - a)) * (d - c)
 }
@@ -202,7 +205,7 @@ fn map_world_to_screen_space(number: BigNumber) -> f32 {
     let mut number_clone = number.clone();
     number_clone.decrease_power(
         number_clone.exponent
-            - (map_ranges(number_clone.exponent as f32, 7.0, 9.0, 1.0, 3.0) as i32),
+            - (map_ranges(number_clone.exponent as f32, 7.0, 8.0, 1.0, 2.0) as i32),
     );
     number_clone.base * Real::powf(10.0, number_clone.exponent as f32)
 }
@@ -262,7 +265,9 @@ fn radius_of_ellipse_from_theta(theta: f32, eccentricity: f32, major_axis: f32) 
     semi_lactus_rect / (1.0 + (eccentricity * f32::cos(theta)))
 }
 fn get_ellispe_period(major_axis: f32, gravitational_constant: f32) -> f32 {
-    f32::sqrt((4.0 * Real::powi(PI, 2) * Real::powi(major_axis, 3)) / gravitational_constant)
+    f32::sqrt(
+        (4.0 * Real::powi(PI, 2) * Real::powi(major_axis, 3)) / (gravitational_constant * SUN_MASS),
+    )
 }
 fn get_delta_theta(
     radius: f32,
@@ -414,17 +419,25 @@ impl<'a> System<'a> for DestroyBackgroundStars {
         }
     }
 }
+#[derive(Clone)]
 struct OrbitMetadata {
     gravitational_constant: f32,
     eccentricity: f32,
     major_axis: f32,
+    color: Vec<Color>,
 }
 impl OrbitMetadata {
-    fn new(gravitational_constant: f32, eccentricity: f32, major_axis: f32) -> Self {
+    fn new(
+        gravitational_constant: f32,
+        eccentricity: f32,
+        major_axis: f32,
+        color: Vec<Color>,
+    ) -> Self {
         OrbitMetadata {
             gravitational_constant,
             eccentricity,
             major_axis,
+            color,
         }
     }
 }
@@ -455,67 +468,30 @@ async fn main() {
     let mut update_background_stars = UpdateBackgroundStars;
     let mut orbit_metadata = HashMap::new();
     orbit_metadata.insert(
-        "Mercury",
+        "Lubaitis",
         OrbitMetadata::new(
             3.7,
-            0.206,
-            map_world_to_screen_space(BigNumber::new_d(ASTRONOMICAL_UNIT) * 0.3871),
+            0.0206,
+            map_world_to_screen_space(BigNumber::new_d(ASTRONOMICAL_UNIT) * 1.4),
+            vec![GRAY, WHITE],
         ),
     );
     orbit_metadata.insert(
-        "Venus",
-        OrbitMetadata::new(
-            8.9,
-            0.007,
-            map_world_to_screen_space(BigNumber::new_d(ASTRONOMICAL_UNIT) * 0.7233),
-        ),
-    );
-    orbit_metadata.insert(
-        "Earth",
-        OrbitMetadata::new(
-            9.8,
-            0.017,
-            map_world_to_screen_space(BigNumber::new_d(ASTRONOMICAL_UNIT) * 1.000),
-        ),
-    );
-    orbit_metadata.insert(
-        "Mars",
-        OrbitMetadata::new(
-            3.7,
-            0.094,
-            map_world_to_screen_space(BigNumber::new_d(ASTRONOMICAL_UNIT) * 1.5273),
-        ),
-    );
-    orbit_metadata.insert(
-        "Jupiter",
+        "Nora U3",
         OrbitMetadata::new(
             23.1,
-            0.049,
-            map_world_to_screen_space(BigNumber::new_d(ASTRONOMICAL_UNIT) * 5.2028),
+            0.99,
+            map_world_to_screen_space(BigNumber::new_d(ASTRONOMICAL_UNIT) * 0.6),
+            vec![BROWN, ORANGE, WHITE],
         ),
     );
     orbit_metadata.insert(
-        "Saturn",
-        OrbitMetadata::new(
-            9.0,
-            0.052,
-            map_world_to_screen_space(BigNumber::new_d(ASTRONOMICAL_UNIT) * 9.5388),
-        ),
-    );
-    orbit_metadata.insert(
-        "Uranus",
+        "Zerth RM8F",
         OrbitMetadata::new(
             8.7,
-            0.047,
-            map_world_to_screen_space(BigNumber::new_d(ASTRONOMICAL_UNIT) * 19.1914),
-        ),
-    );
-    orbit_metadata.insert(
-        "Neptune",
-        OrbitMetadata::new(
-            11.0,
-            0.010,
-            map_world_to_screen_space(BigNumber::new_d(ASTRONOMICAL_UNIT) * 30.0611),
+            0.37,
+            map_world_to_screen_space(BigNumber::new_d(ASTRONOMICAL_UNIT) * 4.0),
+            vec![BLUE, PURPLE],
         ),
     );
     loop {
@@ -526,6 +502,28 @@ async fn main() {
         }
         if first_iteration {
             first_iteration = false;
+            for (key, individual) in orbit_metadata.clone().iter_mut() {
+                let semi_major_axis = individual.major_axis / 2.0;
+                let semi_minor_axis =
+                    semi_major_axis * f32::sqrt(1.0 - Real::powi(individual.eccentricity, 2));
+                let foci =
+                    f32::sqrt(Real::powi(semi_minor_axis, 2) + Real::powi(semi_major_axis, 2));
+                world
+                    .create_entity()
+                    .with(Planet {
+                        position: BigVec2 {
+                            x: map_screen_to_world_space(
+                                (screen_width() / 2.0) + foci + semi_major_axis,
+                            ),
+                            y: map_screen_to_world_space(screen_height() / 2.0),
+                        },
+                        radius: 12.0,
+                        color: individual.color.clone(),
+                        current_color: *individual.color.get(0).unwrap(),
+                        color_elapsed_time: 0.0,
+                    })
+                    .build();
+            }
             world
                 .create_entity()
                 .with(Sun {
@@ -533,7 +531,7 @@ async fn main() {
                         x: map_screen_to_world_space(screen_width() / 2.0),
                         y: map_screen_to_world_space(screen_height() / 2.0),
                     },
-                    radius: 50.0,
+                    radius: 30.0,
                     color: vec![YELLOW, ORANGE],
                     current_color: YELLOW,
                     color_elapsed_time: 0.0,

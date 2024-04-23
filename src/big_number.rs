@@ -410,6 +410,7 @@ impl ops::Mul for BigNumber {
                 ()
             }
         }
+        product.base = get_first_significant_figure(new_multiplier);
         product.increase_power(other.exponent, false);
         match product.serialized {
             Format::Haven(_) => {
