@@ -80,10 +80,12 @@ impl Component for Sun {
 #[derive(Debug)]
 struct Planet {
     position: BigVec2,
+    focus: Vec2,
     radius: f32,
     color: Vec<Color>,
     current_color: Color,
     color_elapsed_time: f32,
+    orbit_data: OrbitMetadata,
 }
 impl SpaceObject for Planet {
     fn get_position(&self) -> BigVec2 {
@@ -260,8 +262,7 @@ fn lerp_color<T: SpaceObject>(object: &mut T) {
 // I reverse-engineered these formulae into code myself
 fn radius_of_ellipse_from_theta(theta: f32, eccentricity: f32, major_axis: f32) -> f32 {
     let semi_major_axis = major_axis / 2.0;
-    let semi_minor_axis = semi_major_axis * f32::sqrt(1.0 - Real::powi(eccentricity, 2));
-    let semi_lactus_rect = semi_minor_axis * f32::sqrt(1.0 - Real::powi(eccentricity, 2));
+    let semi_lactus_rect = semi_major_axis * (1.0 - Real::powi(eccentricity, 2));
     semi_lactus_rect / (1.0 + (eccentricity * f32::cos(theta)))
 }
 fn get_ellispe_period(major_axis: f32, gravitational_constant: f32) -> f32 {
@@ -270,7 +271,7 @@ fn get_ellispe_period(major_axis: f32, gravitational_constant: f32) -> f32 {
     )
 }
 fn get_delta_theta(
-    radius: f32,
+    current_theta: f32,
     eccentricity: f32,
     major_axis: f32,
     gravitational_constant: f32,
@@ -278,7 +279,10 @@ fn get_delta_theta(
     let semi_major_axis = major_axis / 2.0;
     let semi_minor_axis = semi_major_axis * f32::sqrt(1.0 - Real::powi(eccentricity, 2));
     let period = get_ellispe_period(major_axis, gravitational_constant);
-    0.0
+    let mean_motion = (2.0 * PI) / period;
+    let radius = radius_of_ellipse_from_theta(current_theta, eccentricity, major_axis);
+    (semi_minor_axis * semi_major_axis * mean_motion * get_frame_time() * 1000.0)
+        / (Real::powi(radius, 2))
 }
 //
 struct DrawObject;
@@ -286,6 +290,7 @@ struct ColorLerp;
 struct AddBackgroundStars;
 struct UpdateBackgroundStars;
 struct DestroyBackgroundStars;
+struct UpdatePlanetPositions;
 
 struct Renderable;
 impl Component for Renderable {
@@ -366,7 +371,7 @@ impl<'a> System<'a> for AddBackgroundStars {
                                 }),
                         )
                         .normalize()
-                        .mul(rand::gen_range(500, 5000) as f32 / 10.0),
+                        .mul(rand::gen_range(1000, 10000) as f32 / 10.0),
                         ..Default::default()
                     },
                 );
@@ -419,11 +424,12 @@ impl<'a> System<'a> for DestroyBackgroundStars {
         }
     }
 }
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct OrbitMetadata {
     gravitational_constant: f32,
     eccentricity: f32,
     major_axis: f32,
+    theta: f32,
     color: Vec<Color>,
 }
 impl OrbitMetadata {
@@ -438,6 +444,35 @@ impl OrbitMetadata {
             eccentricity,
             major_axis,
             color,
+            theta: 0.0,
+        }
+    }
+}
+impl<'a> System<'a> for UpdatePlanetPositions {
+    type SystemData = (WriteStorage<'a, Planet>);
+    fn run(&mut self, (mut planet): Self::SystemData) {
+        for object in (&mut planet).join() {
+            let mut orbit_data = object.orbit_data.clone();
+            orbit_data.theta = (orbit_data.theta
+                + get_delta_theta(
+                    orbit_data.theta,
+                    orbit_data.eccentricity,
+                    orbit_data.major_axis,
+                    orbit_data.gravitational_constant,
+                ))
+                % (2.0 * PI);
+            let angled_vector = vec2(f32::cos(orbit_data.theta), -f32::sin(orbit_data.theta)).mul(
+                radius_of_ellipse_from_theta(
+                    orbit_data.theta,
+                    orbit_data.eccentricity,
+                    orbit_data.major_axis,
+                ),
+            );
+            object.position = BigVec2 {
+                x: map_screen_to_world_space(object.focus.x + angled_vector.x),
+                y: map_screen_to_world_space(object.focus.y + angled_vector.y),
+            };
+            object.orbit_data = orbit_data;
         }
     }
 }
@@ -466,6 +501,7 @@ async fn main() {
     let mut destroy_background_stars = DestroyBackgroundStars;
     let mut add_background_stars = AddBackgroundStars;
     let mut update_background_stars = UpdateBackgroundStars;
+    let mut update_planet_positions = UpdatePlanetPositions;
     let mut orbit_metadata = HashMap::new();
     orbit_metadata.insert(
         "Lubaitis",
@@ -480,7 +516,7 @@ async fn main() {
         "Nora U3",
         OrbitMetadata::new(
             23.1,
-            0.99,
+            0.8,
             map_world_to_screen_space(BigNumber::new_d(ASTRONOMICAL_UNIT) * 0.6),
             vec![BROWN, ORANGE, WHITE],
         ),
@@ -513,14 +549,19 @@ async fn main() {
                     .with(Planet {
                         position: BigVec2 {
                             x: map_screen_to_world_space(
-                                (screen_width() / 2.0) + foci + semi_major_axis,
+                                (screen_width() / 2.0) + (semi_major_axis - foci),
                             ),
                             y: map_screen_to_world_space(screen_height() / 2.0),
+                        },
+                        focus: Vec2 {
+                            x: (screen_width() / 2.0),
+                            y: screen_height() / 2.0,
                         },
                         radius: 12.0,
                         color: individual.color.clone(),
                         current_color: *individual.color.get(0).unwrap(),
                         color_elapsed_time: 0.0,
+                        orbit_data: individual.clone(),
                     })
                     .build();
             }
@@ -543,6 +584,7 @@ async fn main() {
         add_background_stars.run_now(&mut world);
 
         update_background_stars.run_now(&world);
+        update_planet_positions.run_now(&world);
         color_lerp.run_now(&world);
         draw_object.run_now(&world);
         world.maintain();
