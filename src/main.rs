@@ -4,7 +4,12 @@
 extern crate specs;
 use std::collections::HashMap;
 use std::f32::consts::PI;
+use std::fs::File;
+use std::io;
+use std::io::BufRead;
+use std::io::BufReader;
 use std::ops::Mul;
+use std::path::Path;
 
 use big_number::BigNumber;
 use big_number::BigVec2;
@@ -21,7 +26,9 @@ use macroquad::window::request_new_screen_size;
 use macroquad::window::Conf;
 use num::traits::real::Real;
 use physics::update_bodies;
+use physics::AccelerationType;
 use physics::RigidBody;
+use serde::{Deserialize, Serialize};
 use specs::prelude::*;
 use specs::shred::Fetch;
 use specs::shred::FetchMut;
@@ -371,7 +378,8 @@ impl<'a> System<'a> for AddBackgroundStars {
                                 }),
                         )
                         .normalize()
-                        .mul(rand::gen_range(1000, 10000) as f32 / 10.0),
+                        .mul(rand::gen_range(200, 1000) as f32 / 10.0),
+                        acceleration_type: AccelerationType::Linear,
                         ..Default::default()
                     },
                 );
@@ -424,6 +432,13 @@ impl<'a> System<'a> for DestroyBackgroundStars {
         }
     }
 }
+#[derive(Deserialize, Serialize, Clone, Debug)]
+struct PlaceholderColor {
+    r: f32,
+    g: f32,
+    b: f32,
+    a: f32,
+}
 #[derive(Clone, Debug)]
 struct OrbitMetadata {
     gravitational_constant: f32,
@@ -431,6 +446,27 @@ struct OrbitMetadata {
     major_axis: f32,
     theta: f32,
     color: Vec<Color>,
+}
+#[derive(Deserialize, Serialize, Clone, Debug)]
+struct OrbitMetadataSave {
+    gravitational_constant: f32,
+    eccentricity: f32,
+    major_axis: f32,
+    color: Vec<PlaceholderColor>,
+}
+impl OrbitMetadataSave {
+    fn to_unsavable(&self) -> OrbitMetadata {
+        let mut color_vector = Vec::new();
+        for color in self.color.iter() {
+            color_vector.push(Color::new(color.r, color.g, color.b, color.a))
+        }
+        OrbitMetadata::new(
+            self.gravitational_constant,
+            self.eccentricity,
+            self.major_axis,
+            color_vector,
+        )
+    }
 }
 impl OrbitMetadata {
     fn new(
@@ -445,6 +481,23 @@ impl OrbitMetadata {
             major_axis,
             color,
             theta: 0.0,
+        }
+    }
+    fn to_savable(&self) -> OrbitMetadataSave {
+        let mut color_vector = Vec::new();
+        for color in self.color.clone().iter() {
+            color_vector.push(PlaceholderColor {
+                r: color.r,
+                g: color.g,
+                b: color.b,
+                a: color.a,
+            })
+        }
+        OrbitMetadataSave {
+            gravitational_constant: self.gravitational_constant,
+            eccentricity: self.eccentricity,
+            major_axis: self.major_axis,
+            color: color_vector,
         }
     }
 }
@@ -484,7 +537,7 @@ fn window_conf() -> Conf {
     }
 }
 #[macroquad::main(window_conf)]
-async fn main() {
+async fn main() -> io::Result<()> {
     request_new_screen_size(0.8 * 1920.0, 0.8 * 1080.0);
     let mut world = World::new();
     world.register::<Sun>();
@@ -530,6 +583,13 @@ async fn main() {
             vec![BLUE, PURPLE],
         ),
     );
+    let data_base_path = Path::new("../data_base");
+    let written_file = File::open(&data_base_path.join("written.json"))?;
+    let transformed_file = File::create(&data_base_path.join("transformed.json"))?;
+    let written_file_reader = BufReader::new(written_file);
+    let is_data_base_new = written_file_reader.lines().count() == 0;
+
+    println!("{}", written_file_reader.lines().count());
     loop {
         clear_background(BLACK);
         if screen_width() != 0.8 * 1920.0 || screen_height() != 0.8 * 1080.0 {

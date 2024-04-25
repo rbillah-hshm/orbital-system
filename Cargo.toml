@@ -9,4 +9,5 @@ edition = "2021"
 macroquad = "0.4.5"
 num = "0.4.2"
 rand = "0.8.5"
+serde = {version = "1.0.198", features = ["derive"]}
 specs = "0.20.0"
