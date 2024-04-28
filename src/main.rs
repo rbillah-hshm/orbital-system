@@ -3,7 +3,10 @@
 #![allow(unused_variables)]
 extern crate specs;
 use std::collections::HashMap;
+use std::default;
+use std::env;
 use std::f32::consts::PI;
+use std::fmt::format;
 use std::fs::File;
 use std::io;
 use std::io::BufRead;
@@ -29,6 +32,8 @@ use physics::update_bodies;
 use physics::AccelerationType;
 use physics::RigidBody;
 use serde::{Deserialize, Serialize};
+use serde_json::Deserializer;
+use serde_json::Value;
 use specs::prelude::*;
 use specs::shred::Fetch;
 use specs::shred::FetchMut;
@@ -452,18 +457,21 @@ struct OrbitMetadataSave {
     gravitational_constant: f32,
     eccentricity: f32,
     major_axis: f32,
-    color: Vec<PlaceholderColor>,
+    name: String,
 }
 impl OrbitMetadataSave {
     fn to_unsavable(&self) -> OrbitMetadata {
         let mut color_vector = Vec::new();
-        for color in self.color.iter() {
-            color_vector.push(Color::new(color.r, color.g, color.b, color.a))
-        }
+        color_vector.push(Color::new(
+            rand::gen_range(0.0, 1.0),
+            rand::gen_range(0.0, 1.0),
+            rand::gen_range(0.0, 1.0),
+            1.0,
+        ));
         OrbitMetadata::new(
             self.gravitational_constant,
             self.eccentricity,
-            self.major_axis,
+            map_world_to_screen_space(BigNumber::new_d(ASTRONOMICAL_UNIT) * self.major_axis),
             color_vector,
         )
     }
@@ -481,23 +489,6 @@ impl OrbitMetadata {
             major_axis,
             color,
             theta: 0.0,
-        }
-    }
-    fn to_savable(&self) -> OrbitMetadataSave {
-        let mut color_vector = Vec::new();
-        for color in self.color.clone().iter() {
-            color_vector.push(PlaceholderColor {
-                r: color.r,
-                g: color.g,
-                b: color.b,
-                a: color.a,
-            })
-        }
-        OrbitMetadataSave {
-            gravitational_constant: self.gravitational_constant,
-            eccentricity: self.eccentricity,
-            major_axis: self.major_axis,
-            color: color_vector,
         }
     }
 }
@@ -536,8 +527,13 @@ fn window_conf() -> Conf {
         ..Default::default()
     }
 }
+enum JSONParser {
+    Rest,
+    Color,
+}
 #[macroquad::main(window_conf)]
 async fn main() -> io::Result<()> {
+    env::set_var("RUST_BACKTRACE", "full");
     request_new_screen_size(0.8 * 1920.0, 0.8 * 1080.0);
     let mut world = World::new();
     world.register::<Sun>();
@@ -557,7 +553,7 @@ async fn main() -> io::Result<()> {
     let mut update_planet_positions = UpdatePlanetPositions;
     let mut orbit_metadata = HashMap::new();
     orbit_metadata.insert(
-        "Lubaitis",
+        "Lubaitis".to_string(),
         OrbitMetadata::new(
             3.7,
             0.0206,
@@ -566,7 +562,7 @@ async fn main() -> io::Result<()> {
         ),
     );
     orbit_metadata.insert(
-        "Nora U3",
+        "Nora U3".to_string(),
         OrbitMetadata::new(
             23.1,
             0.8,
@@ -575,7 +571,7 @@ async fn main() -> io::Result<()> {
         ),
     );
     orbit_metadata.insert(
-        "Zerth RM8F",
+        "Zerth RM8F".to_string(),
         OrbitMetadata::new(
             8.7,
             0.37,
@@ -583,13 +579,74 @@ async fn main() -> io::Result<()> {
             vec![BLUE, PURPLE],
         ),
     );
-    let data_base_path = Path::new("../data_base");
+    let data_base_path = Path::new("data_base");
     let written_file = File::open(&data_base_path.join("written.json"))?;
-    let transformed_file = File::create(&data_base_path.join("transformed.json"))?;
-    let written_file_reader = BufReader::new(written_file);
-    let is_data_base_new = written_file_reader.lines().count() == 0;
-
-    println!("{}", written_file_reader.lines().count());
+    let written_file_reader = BufReader::new(&written_file);
+    let mut metadata = Vec::new();
+    metadata.push(String::new());
+    let mut indent_sizes = Vec::new();
+    for line in written_file_reader.lines() {
+        let mut unwrapped_line = line.unwrap();
+        let indent_size = unwrapped_line.len() - unwrapped_line.trim_start().len();
+        unwrapped_line = unwrapped_line.trim().to_string();
+        let mut vector_indent_index = 0;
+        if (indent_sizes.get(indent_size).is_some()) {
+            vector_indent_index = *indent_sizes.get(indent_size).unwrap();
+        } else {
+            vector_indent_index = indent_sizes.len();
+            indent_sizes.push(vector_indent_index);
+        }
+        if (vector_indent_index == 1) {
+            let mut last = metadata.last().unwrap().clone();
+            metadata.pop();
+            if (!unwrapped_line.contains("}")) {
+                last.push_str("{");
+                metadata.push(last);
+                continue;
+            }
+            last.push_str(unwrapped_line.as_str());
+            metadata.push(last);
+            metadata.push(String::new());
+        } else if (vector_indent_index == 2) {
+            let mut last = metadata.last().unwrap().clone();
+            last.push_str(unwrapped_line.as_str());
+            metadata.pop();
+            metadata.push(last);
+        }
+    }
+    for string_data in metadata {
+        let orbit_object = Deserializer::from_str(string_data.trim()).into_iter::<Value>();
+        for value in orbit_object {
+            let unwrapped_value = value.unwrap();
+            let gravitational_constant = match (unwrapped_value.get("gravitational_constant")) {
+                Some(value) => value.as_f64().unwrap(),
+                None => 0.0,
+            } as f32;
+            let eccentricity = match (unwrapped_value.get("eccentricity")) {
+                Some(value) => value.as_f64().unwrap(),
+                None => 0.0,
+            } as f32;
+            let major_axis = match (unwrapped_value.get("major_axis")) {
+                Some(value) => value.as_f64().unwrap(),
+                None => 0.0,
+            } as f32;
+            let name = match (unwrapped_value.get("name")) {
+                Some(value) => value.as_str().unwrap(),
+                None => "L",
+            }
+            .to_string();
+            orbit_metadata.insert(
+                name.clone(),
+                (OrbitMetadataSave {
+                    gravitational_constant,
+                    eccentricity,
+                    major_axis,
+                    name,
+                })
+                .to_unsavable(),
+            );
+        }
+    }
     loop {
         clear_background(BLACK);
         if screen_width() != 0.8 * 1920.0 || screen_height() != 0.8 * 1080.0 {
