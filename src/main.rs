@@ -18,6 +18,7 @@ use big_number::BigNumber;
 use big_number::BigVec2;
 
 use ::rand::random;
+use big_number::Format;
 use macroquad::color;
 use macroquad::color::BLACK;
 use macroquad::math::Vec2;
@@ -35,13 +36,12 @@ use serde::{Deserialize, Serialize};
 use serde_json::Deserializer;
 use serde_json::Value;
 use specs::prelude::*;
-use specs::shred::Fetch;
-use specs::shred::FetchMut;
 mod big_number;
 mod physics;
 
 const SUN_MASS: f32 = 1.0;
 const ASTRONOMICAL_UNIT: f32 = 149597871.0;
+const FONT_SIZE: f32 = 32.0;
 // Hierarchy: Sun => Planet => Moon
 // Planets are unscaled for the sake of visualization purposes
 trait SpaceObject {
@@ -89,7 +89,7 @@ impl SpaceObject for Sun {
 impl Component for Sun {
     type Storage = VecStorage<Self>;
 }
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 struct Planet {
     position: BigVec2,
     focus: Vec2,
@@ -97,6 +97,7 @@ struct Planet {
     color: Vec<Color>,
     current_color: Color,
     color_elapsed_time: f32,
+    name: String,
     orbit_data: OrbitMetadata,
 }
 impl SpaceObject for Planet {
@@ -303,6 +304,8 @@ struct AddBackgroundStars;
 struct UpdateBackgroundStars;
 struct DestroyBackgroundStars;
 struct UpdatePlanetPositions;
+struct DrawTextAbovePlanets;
+struct DisplayPlanetInformation;
 
 struct Renderable;
 impl Component for Renderable {
@@ -520,16 +523,80 @@ impl<'a> System<'a> for UpdatePlanetPositions {
         }
     }
 }
+impl<'a> System<'a> for DrawTextAbovePlanets {
+    type SystemData = (ReadStorage<'a, Planet>);
+    fn run(&mut self, (planet): Self::SystemData) {
+        for object in planet.join() {
+            draw_text(
+                &object.name,
+                map_world_to_screen_space(object.position.clone().x),
+                map_world_to_screen_space(object.position.clone().y) - 50.0,
+                32.0,
+                RED,
+            );
+        }
+    }
+}
+impl<'a> System<'a> for DisplayPlanetInformation {
+    type SystemData = (Write<'a, SelectedPlanet>, ReadStorage<'a, Planet>);
+    fn run(&mut self, (mut selected_planet, planet): Self::SystemData) {
+        let (mouse_x, mouse_y) = mouse_position();
+        let mut identical = None;
+        for object in planet.join() {
+            let object_position = object.get_position();
+            if ((((mouse_x - (map_world_to_screen_space(object_position.x))).abs()
+                < object.radius)
+                && ((mouse_y - map_world_to_screen_space(object_position.y)).abs()
+                    < object.radius))
+                && is_mouse_button_pressed(MouseButton::Left))
+            {
+                identical = Some((*object).clone());
+            }
+            match selected_planet.0 {
+                Some(ref x) => {
+                    if (x.name == object.name) {
+                        identical = Some(object.clone());
+                    }
+                }
+                None => {}
+            }
+        }
+        selected_planet.0 = identical;
+        match selected_planet.0 {
+            Some(ref x) => {
+                let position = x.get_position();
+                draw_text(
+                    format!(
+                        "Coordinates: ({}, {})",
+                        match position.x.serialized {
+                            Format::Haven(x) => x,
+                            Format::Scientific(x) => x,
+                        },
+                        match position.y.serialized {
+                            Format::Haven(x) => x,
+                            Format::Scientific(x) => x,
+                        }
+                    )
+                    .as_str(),
+                    (0.8 * 1920.0) - FONT_SIZE * 15.0,
+                    FONT_SIZE * 1.0,
+                    FONT_SIZE,
+                    GREEN,
+                )
+            }
+            _ => {}
+        }
+        ()
+    }
+}
+#[derive(Default)]
+struct SelectedPlanet(Option<Planet>);
 fn window_conf() -> Conf {
     Conf {
         window_title: "ORBITAL_SYSTEM".to_string(),
         window_resizable: false,
         ..Default::default()
     }
-}
-enum JSONParser {
-    Rest,
-    Color,
 }
 #[macroquad::main(window_conf)]
 async fn main() -> io::Result<()> {
@@ -543,6 +610,7 @@ async fn main() -> io::Result<()> {
 
     world.register::<Renderable>();
     world.register::<RigidBody>();
+    world.insert(SelectedPlanet(None));
     // Initialize Simulation
     let mut first_iteration = true;
     let mut color_lerp = ColorLerp;
@@ -551,6 +619,8 @@ async fn main() -> io::Result<()> {
     let mut add_background_stars = AddBackgroundStars;
     let mut update_background_stars = UpdateBackgroundStars;
     let mut update_planet_positions = UpdatePlanetPositions;
+    let mut draw_text_above_planets = DrawTextAbovePlanets;
+    let mut display_planet_information = DisplayPlanetInformation;
     let mut orbit_metadata = HashMap::new();
     orbit_metadata.insert(
         "Lubaitis".to_string(),
@@ -604,7 +674,7 @@ async fn main() -> io::Result<()> {
                 metadata.push(last);
                 continue;
             }
-            last.push_str(unwrapped_line.as_str());
+            last.push_str("}");
             metadata.push(last);
             metadata.push(String::new());
         } else if (vector_indent_index == 2) {
@@ -655,7 +725,7 @@ async fn main() -> io::Result<()> {
         }
         if first_iteration {
             first_iteration = false;
-            for (key, individual) in orbit_metadata.clone().iter_mut() {
+            for (key, individual) in orbit_metadata.iter_mut() {
                 let semi_major_axis = individual.major_axis / 2.0;
                 let semi_minor_axis =
                     semi_major_axis * f32::sqrt(1.0 - Real::powi(individual.eccentricity, 2));
@@ -678,6 +748,7 @@ async fn main() -> io::Result<()> {
                         color: individual.color.clone(),
                         current_color: *individual.color.get(0).unwrap(),
                         color_elapsed_time: 0.0,
+                        name: key.to_string(),
                         orbit_data: individual.clone(),
                     })
                     .build();
@@ -704,6 +775,8 @@ async fn main() -> io::Result<()> {
         update_planet_positions.run_now(&world);
         color_lerp.run_now(&world);
         draw_object.run_now(&world);
+        draw_text_above_planets.run_now(&world);
+        display_planet_information.run_now(&world);
         world.maintain();
         next_frame().await;
     }

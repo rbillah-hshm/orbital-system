@@ -22,6 +22,7 @@ const HAVEN_ABBREVIATIONS: [Option<&str>; 9] = [
     Some("SX"),
     Some("SP"),
 ];
+const ROUNDING_ORDER: f32 = 2.0;
 fn bool_from_number(number: i32) -> bool {
     match number {
         -1 => false,
@@ -63,6 +64,9 @@ fn exponential_modulo_ten(a: f32, b: f32) -> i32 {
 }
 fn get_first_significant_figure(number: f32) -> f32 {
     number / Real::powf(10.0, number.log10().floor())
+}
+fn round_to_order(number: f32) -> f32 {
+    (number * Real::powf(10.0, ROUNDING_ORDER)).floor() / Real::powf(10.0, ROUNDING_ORDER)
 }
 fn is_between_integers(a: f32, b: i32, c: i32) -> bool {
     (a > b as f32) && (a < c as f32)
@@ -414,8 +418,11 @@ impl ops::Mul for BigNumber {
         product.increase_power(other.exponent, false);
         match product.serialized {
             Format::Haven(_) => {
-                product.serialized =
-                    Format::Haven(Haven::create(new_multiplier, product.exponent, true));
+                product.serialized = Format::Haven(Haven::create(
+                    round_to_order(new_multiplier),
+                    product.exponent,
+                    true,
+                ));
             }
             Format::Scientific(_) => {
                 product.serialized =

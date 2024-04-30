@@ -1,8 +1,14 @@
 {
 	"Gojo": {
-		"gravitational_constant": 5.0,
-		"eccentricity": 0.5,
+		"gravitational_constant": 30.0,
+		"eccentricity": 0.9,
 		"major_axis": 2.0,
 		"name": "Gojo"
-	}	
+	},
+	"Light": {
+		"gravitational_constant": 10.0,
+		"eccentricity": 0.2,
+		"major_axis": 3.0,
+		"name": "Light"
+	},
 }
